@@ -1,11 +1,13 @@
 from typing import List, Dict, TypedDict, Optional
-from dataclasses import dataclass
 import asyncio
 import os
 from firecrawl import FirecrawlApp
 from .ai.providers import openai_client, trim_prompt
 from .prompt import system_prompt
 import json
+from .common import count_token, log_event, log_error
+from .utils import process_response_content
+from pydantic import BaseModel
 
 
 class SearchResponse(TypedDict):
@@ -17,10 +19,12 @@ class ResearchResult(TypedDict):
     visited_urls: List[str]
 
 
-@dataclass
-class SerpQuery:
+class SerpQuery(BaseModel):
     query: str
     research_goal: str
+
+class SerpQueryResponse(BaseModel):
+    queries: List[SerpQuery]
 
 
 class Firecrawl:
@@ -91,7 +95,12 @@ async def generate_serp_queries(
 ) -> List[SerpQuery]:
     """Generate SERP queries based on user input and previous learnings."""
 
-    prompt = f"""Given the following prompt from the user, generate a list of SERP queries to research the topic. Return a JSON object with a 'queries' array field containing {num_queries} queries (or less if the original prompt is clear). Each query object should have 'query' and 'research_goal' fields. Make sure each query is unique and not similar to each other: <prompt>{query}</prompt>"""
+    prompt = (
+        f"Given the following prompt from the user, generate a list of SERP queries to research the topic. "
+        f"Return should contain {num_queries} queries (or less if the original prompt is clear). "
+        f"Make sure each query is unique and not similar to each other: <prompt>{query}</prompt>"
+        f"<schema>{SerpQueryResponse.model_json_schema()}</schema>."
+    )
 
     if learnings:
         prompt += f"\n\nHere are some learnings from previous research, use them to generate more specific queries: {' '.join(learnings)}"
@@ -104,20 +113,30 @@ async def generate_serp_queries(
                 {"role": "system", "content": system_prompt()},
                 {"role": "user", "content": prompt},
             ],
-            response_format={"type": "json_object"},
+            response_format=SerpQueryResponse.model_json_schema(),
         ),
     )
 
     try:
-        result = json.loads(response.choices[0].message.content)
+        result = process_response_content(response.choices[0].message.content)
+        count_token(response, f"generate_serp_queries: {query[:50]}")
         queries = result.get("queries", [])
+        log_event(
+            f"generate serp queries: {query}, got {len(queries)}, use queries: {[SerpQuery(**q) for q in queries][:num_queries]}",
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+        )
         return [SerpQuery(**q) for q in queries][:num_queries]
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON response: {e}")
-        print(f"Raw response: {response.choices[0].message.content}")
+        log_error(f"Error parsing JSON response: {e}")
+        log_error(f"Raw response: {response.choices[0].message.content}")
         return []
 
 
+class LearningResponse(BaseModel):
+    learnings: List[str]
+    followUpQuestions: List[str]
+    
 async def process_serp_result(
     query: str,
     search_result: SearchResponse,
@@ -137,11 +156,12 @@ async def process_serp_result(
 
     prompt = (
         f"Given the following contents from a SERP search for the query <query>{query}</query>, "
-        f"generate a list of learnings from the contents. Return a JSON object with 'learnings' "
-        f"and 'followUpQuestions' arrays. Include up to {num_learnings} learnings and "
+        f"generate a list of learnings from the contents."
+        f"Include up to {num_learnings} learnings and "
         f"{num_follow_up_questions} follow-up questions. The learnings should be unique, "
         "concise, and information-dense, including entities, metrics, numbers, and dates.\n\n"
         f"<contents>{contents_str}</contents>"
+        f"<schema>{LearningResponse.model_json_schema()}</schema>"
     )
 
     response = await asyncio.get_event_loop().run_in_executor(
@@ -152,12 +172,19 @@ async def process_serp_result(
                 {"role": "system", "content": system_prompt()},
                 {"role": "user", "content": prompt},
             ],
-            response_format={"type": "json_object"},
+            response_format=LearningResponse.model_json_schema(),
         ),
     )
 
     try:
-        result = json.loads(response.choices[0].message.content)
+        print(response.choices[0].message.content)
+        result = process_response_content(response.choices[0].message.content)
+        count_token(response, f"process_serp_result: {query[:50]}")
+        log_event(
+            f"process serp result: {query}, got {len(result.get('learnings', []))} learnings: {result.get('learnings', [])[:num_learnings]} \n follow up questions: {result.get('followUpQuestions', [])[:num_follow_up_questions]}",
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+        )
         return {
             "learnings": result.get("learnings", [])[:num_learnings],
             "followUpQuestions": result.get("followUpQuestions", [])[
@@ -165,11 +192,14 @@ async def process_serp_result(
             ],
         }
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON response: {e}")
-        print(f"Raw response: {response.choices[0].message.content}")
+        log_error(f"Error parsing JSON response: {e}")
+        log_error(f"Raw response: {response.choices[0].message.content}")
         return {"learnings": [], "followUpQuestions": []}
 
 
+class FinalReportResponse(BaseModel):
+    reportMarkdown: str
+    
 async def write_final_report(
     prompt: str, learnings: List[str], visited_urls: List[str]
 ) -> str:
@@ -182,10 +212,11 @@ async def write_final_report(
 
     user_prompt = (
         f"Given the following prompt from the user, write a final report on the topic using "
-        f"the learnings from research. Return a JSON object with a 'reportMarkdown' field "
-        f"containing a detailed markdown report (aim for 3+ pages). Include ALL the learnings "
+        f"the learnings from research."
+        f"Result should contain a detailed markdown report (aim for 3+ pages). Include ALL the learnings "
         f"from research:\n\n<prompt>{prompt}</prompt>\n\n"
         f"Here are all the learnings from research:\n\n<learnings>\n{learnings_string}\n</learnings>"
+        f"<schema>{FinalReportResponse.model_json_schema()}</schema>"
     )
 
     response = await asyncio.get_event_loop().run_in_executor(
@@ -196,13 +227,19 @@ async def write_final_report(
                 {"role": "system", "content": system_prompt()},
                 {"role": "user", "content": user_prompt},
             ],
-            response_format={"type": "json_object"},
+            response_format=FinalReportResponse.model_json_schema(),
         ),
     )
 
     try:
-        result = json.loads(response.choices[0].message.content)
+        result = process_response_content(response.choices[0].message.content)
+        count_token(response, f"write_final_report: {prompt[:50]}")
         report = result.get("reportMarkdown", "")
+        log_event(
+            f"write final report: {prompt}, got report with {len(report)} characters",
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+        )
 
         # Append sources
         urls_section = "\n\n## Sources\n\n" + "\n".join(
@@ -210,8 +247,8 @@ async def write_final_report(
         )
         return report + urls_section
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON response: {e}")
-        print(f"Raw response: {response.choices[0].message.content}")
+        log_error(f"Error parsing JSON response: {e}")
+        log_error(f"Raw response: {response.choices[0].message.content}")
         return "Error generating report"
 
 
@@ -305,7 +342,7 @@ async def deep_research(
 
     # Combine all results
     all_learnings = list(
-        set(learning for result in results for learning in result["learnings"])
+        set(learning.__repr__() for result in results for learning in result["learnings"])
     )
 
     all_urls = list(set(url for result in results for url in result["visited_urls"]))

@@ -10,6 +10,9 @@ from rich import print as rprint
 from deep_research_py.deep_research import deep_research, write_final_report
 from deep_research_py.feedback import generate_feedback
 
+from deep_research_py.common.token_counter import counter
+from deep_research_py.common.logger import setup_logger, log_event
+
 app = typer.Typer()
 console = Console()
 session = PromptSession()
@@ -34,7 +37,17 @@ async def main(
     concurrency: int = typer.Option(
         default=2, help="Number of concurrent tasks, depending on your API rate limits."
     ),
+    token_count: bool = typer.Option(
+        default=False, help="Enable token counting for the research process."
+    ),
+    verbose: bool = typer.Option(
+        default=False, help="Enable verbose logging for debugging purposes."
+    ),
 ):
+    if verbose:
+        setup_logger("deep_research_py.log")
+        log_event("CLI started", 0, 0)
+        
     """Deep Research CLI"""
     console.print(
         Panel.fit(
@@ -121,6 +134,16 @@ async def main(
         with open("output.md", "w") as f:
             f.write(report)
         console.print("\n[dim]Report has been saved to output.md[/dim]")
+
+        if token_count:
+            with open("token.log", "w") as f:
+                f.write(
+                    f"Input Tokens: {counter.input_tokens}\n"
+                    f"Output Tokens: {counter.output_tokens}\n"
+                    f"Events:\n"
+                )
+                for event in counter.events:
+                    f.write(f"{event}\n")
 
 
 def run():
