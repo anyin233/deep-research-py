@@ -37,14 +37,14 @@ async def main(
     concurrency: int = typer.Option(
         default=2, help="Number of concurrent tasks, depending on your API rate limits."
     ),
-    token_count: bool = typer.Option(
+    track_token_consume: bool = typer.Option(
         default=False, help="Enable token counting for the research process."
     ),
-    verbose: bool = typer.Option(
+    enable_logging: bool = typer.Option(
         default=False, help="Enable verbose logging for debugging purposes."
     ),
 ):
-    if verbose:
+    if enable_logging:
         setup_logger("deep_research_py.log")
         log_event("CLI started", 0, 0)
         
@@ -135,7 +135,7 @@ async def main(
             f.write(report)
         console.print("\n[dim]Report has been saved to output.md[/dim]")
 
-        if token_count:
+        if track_token_consume:
             with open("token.log", "w") as f:
                 f.write(
                     f"Input Tokens: {counter.input_tokens}\n"
