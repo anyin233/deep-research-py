@@ -10,7 +10,7 @@ from pydantic import BaseModel
 class FeedbackResponse(BaseModel):
     questions: List[str]
 
-async def generate_feedback(query: str, client: openai.OpenAI, model: str) -> List[str]:
+async def generate_feedback(query: str, client: openai.OpenAI, model: str, max_questions: int = 5) -> List[str]:
     """Generates follow-up questions to clarify research direction."""
 
     # Run OpenAI call in thread pool since it's synchronous

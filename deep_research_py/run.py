@@ -50,6 +50,10 @@ async def main(
         default="o3-mini",
         help="Which model to use?"
     ),
+    max_questions: int = typer.Option(
+        default=5,
+        help="Maximum number of feedback questions to generate.",
+    ),
     track_token_consume: bool = typer.Option(
         default=False, help="Enable token counting for the research process."
     ),
@@ -87,7 +91,7 @@ async def main(
 
     # First show progress for research plan
     console.print("\n[yellow]Creating research plan...[/yellow]")
-    follow_up_questions = await generate_feedback(query, client, model)
+    follow_up_questions = await generate_feedback(query, client, model, max_questions)
 
     # Then collect answers separately from progress display
     console.print("\n[bold yellow]Follow-up Questions:[/bold yellow]")
