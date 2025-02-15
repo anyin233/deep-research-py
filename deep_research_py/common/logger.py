@@ -1,17 +1,20 @@
 import logging
+import datetime
 
 logger = logging.getLogger("deep_research_py")
 logger_enabled = False
 
-def setup_logger(log_file: str = "deep_research_py.log") -> None:
+def setup_logger() -> None:
   """Sets up the logger for the application."""
   global logger_enabled
   logger_enabled = True
+  now = datetime.datetime.now()
+  log_file = f"deep_research_py_{now.strftime('%Y%m%d_%H%M%S')}.log"
+  # Set up logging to a file
   logging.basicConfig(
       level=logging.INFO,
       format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
       handlers=[
-          logging.StreamHandler(),
           logging.FileHandler(log_file),
       ],
   )
